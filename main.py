@@ -1,216 +1,118 @@
 import streamlit as st
-
+import plotly.graph_objects as go
 import numpy as np
 
-from astropy.io import fits
-
-from PIL import Image
-
-from astropy.coordinates import SkyCoord, EarthLocation, AltAz
-
-from astropy.time import Time
-
-from datetime import datetime
-
-
-# --- Streamlit 앱 페이지 설정 ---
-
-st.set_page_config(page_title="천문 이미지 분석기", layout="wide")
-
-st.title("🔭 천문 이미지 처리 앱")
-
-
-# --- 파일 업로더 ---
-
-uploaded_file = st.file_uploader(
-
-    "분석할 FITS 파일을 선택하세요.",
-
-    type=['fits', 'fit', 'fz']
-
-)
-
-
-# --- 서울 위치 설정 (고정값) ---
-
-seoul_location = EarthLocation(lat=37.5665, lon=126.9780, height=50)  # 서울 위도/경도/고도
-
-
-# --- 현재 시간 (UTC 기준) ---
-
-now = datetime.utcnow()
-
-now_astropy = Time(now)
-
-
-# --- 파일이 업로드되면 실행될 로직 ---
-
-if uploaded_file:
-
-    try:
-
-        with fits.open(uploaded_file) as hdul:
-
-            image_hdu = None
-
-            for hdu in hdul:
-
-                if hdu.data is not None and hdu.is_image:
-
-                    image_hdu = hdu
-
-                    break
-
-
-            if image_hdu is None:
-
-                st.error("파일에서 유효한 이미지 데이터를 찾을 수 없습니다.")
-
-            else:
-
-                header = image_hdu.header
-
-                data = image_hdu.data
-
-                data = np.nan_to_num(data)
-
-
-                st.success(f"**'{uploaded_file.name}'** 파일을 성공적으로 처리했습니다.")
-
-                col1, col2 = st.columns(2)
-
-
-                with col1:
-
-                    st.header("이미지 정보")
-
-                    st.text(f"크기: {data.shape[1]} x {data.shape[0]} 픽셀")
-
-                    if 'OBJECT' in header:
-
-                        st.text(f"관측 대상: {header['OBJECT']}")
-
-                    if 'EXPTIME' in header:
-
-                        st.text(f"노출 시간: {header['EXPTIME']} 초")
-
-
-                    st.header("물리량")
-
-                    mean_brightness = np.mean(data)
-
-                    st.metric(label="이미지 전체 평균 밝기", value=f"{mean_brightness:.2f}")
-
-
-                with col2:
-
-                    st.header("이미지 미리보기")
-
-                    if data.max() == data.min():
-
-                        norm_data = np.zeros(data.shape, dtype=np.uint8)
-
-                    else:
-
-                        scale_min = np.percentile(data, 5)
-
-                        scale_max = np.percentile(data, 99.5)
-
-                        data_clipped = np.clip(data, scale_min, scale_max)
-
-                        norm_data = (255 * (data_clipped - scale_min) / (scale_max - scale_min)).astype(np.uint8)
-
-
-                    img = Image.fromarray(norm_data)
-
-                    st.image(img, caption="업로드된 FITS 이미지", use_container_width=True)
-
-
-
-                # --- 사이드바: 현재 천체 위치 계산 ---
-
-                st.sidebar.header("🧭 현재 천체 위치 (서울 기준)")
-
-
-                if 'RA' in header and 'DEC' in header:
-
-                    try:
-
-                        target_coord = SkyCoord(ra=header['RA'], dec=header['DEC'], unit=('hourangle', 'deg'))
-
-                        altaz = target_coord.transform_to(AltAz(obstime=now_astropy, location=seoul_location))
-
-                        altitude = altaz.alt.degree
-
-                        azimuth = altaz.az.degree
-
-
-                        st.sidebar.metric("고도 (°)", f"{altitude:.2f}")
-
-                        st.sidebar.metric("방위각 (°)", f"{azimuth:.2f}")
-
-                    except Exception as e:
-
-                        st.sidebar.warning(f"천체 위치 계산 실패: {e}")
-
-                else:
-
-                    st.sidebar.info("FITS 헤더에 RA/DEC 정보가 없습니다.")
-
-
-    except Exception as e:
-
-        st.error(f"파일 처리 중 오류가 발생했습니다: {e}")
-
-        st.warning("파일이 손상되었거나 유효한 FITS 형식이 아닐 수 있습니다.")
-
-else:
-
-    st.info("시작하려면 FITS 파일을 업로드해주세요.")
-
-
-# --- 💬 댓글 기능 (세션 기반) ---
-
-st.divider()
-
-st.header("💬 의견 남기기")
-
-
-if "comments" not in st.session_state:
-
-    st.session_state.comments = []
-
-
-with st.form(key="comment_form"):
-
-    name = st.text_input("이름을 입력하세요", key="name_input")
-
-    comment = st.text_area("댓글을 입력하세요", key="comment_input")
-
-    submitted = st.form_submit_button("댓글 남기기")
-
-
-    if submitted:
-
-        if name.strip() and comment.strip():
-
-            st.session_state.comments.append((name.strip(), comment.strip()))
-
-            st.success("댓글이 저장되었습니다.")
-
-        else:
-
-            st.warning("이름과 댓글을 모두 입력해주세요.")
-
-
-if st.session_state.comments:
-
-    st.subheader("📋 전체 댓글")
-
-    for i, (n, c) in enumerate(reversed(st.session_state.comments), 1):
-
-        st.markdown(f"**{i}. {n}**: {c}")
-
-else:
-
-    st.info("아직 댓글이 없습니다. 첫 댓글을 남겨보세요!")
+# H-R 다이어그램 배경 데이터 생성 함수
+def generate_hr_background():
+    # 주계열성
+    log_L_ms = np.linspace(-4, 6, 100)  # 광도 범위 (로그 스케일)
+    log_T_ms = 3.76 - 0.1 * log_L_ms    # 온도와 광도의 단순 관계
+    L_ms = 10 ** log_L_ms
+    T_ms = 10 ** log_T_ms
+
+    # 거성
+    log_L_giants = np.linspace(1, 4, 50)
+    log_T_giants = np.linspace(3.5, 3.7, 50)
+    L_giants = 10 ** log_L_giants
+    T_giants = 10 ** log_T_giants
+
+    # 백색왜성
+    log_L_wd = np.linspace(-4, -1, 50)
+    log_T_wd = np.linspace(4, 4.5, 50)
+    L_wd = 10 ** log_L_wd
+    T_wd = 10 ** log_T_wd
+
+    return L_ms, T_ms, L_giants, T_giants, L_wd, T_wd
+
+# 광도로부터 질량 추정 함수
+def estimate_mass(L):
+    return L ** (1 / 3.5)  # 주계열성의 질량-광도 관계: M = L^(1/3.5)
+
+# 진화 경로 정의 함수
+def define_evolution_path(L, T, M):
+    if M < 8:
+        # 저질량 별: 주계열성 -> 적색거성 -> 백색왜성
+        path = [
+            (L, T),             # 주계열성
+            (L * 100, T * 0.7), # 적색거성
+            (L / 100, T * 1.5)  # 백색왜성
+        ]
+    else:
+        # 고질량 별: 주계열성 -> 초거성 -> 초신성
+        path = [
+            (L, T),              # 주계열성
+            (L * 1000, T * 0.6), # 초거성
+            (L * 1000, T * 0.6)  # 초신성 (위치 유지로 표현)
+        ]
+    return path
+
+# Plotly 그래프 생성 함수
+def create_plot(L_ms, T_ms, L_giants, T_giants, L_wd, T_wd, path):
+    fig = go.Figure()
+
+    # 배경 데이터 추가
+    fig.add_trace(go.Scatter(x=T_ms, y=L_ms, mode='markers', name='주계열성', marker=dict(color='blue', size=5)))
+    fig.add_trace(go.Scatter(x=T_giants, y=L_giants, mode='markers', name='거성', marker=dict(color='red', size=5)))
+    fig.add_trace(go.Scatter(x=T_wd, y=L_wd, mode='markers', name='백색왜성', marker=dict(color='green', size=5)))
+
+    # 별의 진화 경로 추가
+    path_T = [p[1] for p in path]
+    path_L = [p[0] for p in path]
+    fig.add_trace(go.Scatter(x=path_T, y=path_L, mode='lines+markers', name='진화 경로', line=dict(color='black'), marker=dict(size=10)))
+
+    # 애니메이션 프레임 생성
+    frames = []
+    for i in range(len(path)):
+        frame = go.Frame(data=[go.Scatter(x=[path_T[i]], y=[path_L[i]], mode='markers', marker=dict(color='yellow', size=15))])
+        frames.append(frame)
+
+    fig.frames = frames
+
+    # 레이아웃 설정
+    fig.update_layout(
+        title='H-R 다이어그램과 별의 진화',
+        xaxis_title='온도 (K)',
+        yaxis_title='광도 (L_sun)',
+        xaxis=dict(autorange='reversed', type='log'),  # 온도는 왼쪽에서 오른쪽으로 감소
+        yaxis=dict(type='log'),
+        updatemenus=[dict(type='buttons', buttons=[dict(label='재생', method='animate', args=[None, dict(frame=dict(duration=1000, redraw=True), fromcurrent=True)])])]
+    )
+
+    return fig
+
+# Streamlit 앱
+def main():
+    st.title("H-R 다이어그램에서 별의 진화 시뮬레이션")
+
+    # 사용자 입력
+    st.write("별의 광도와 온도를 입력하세요:")
+    L = st.number_input("광도 (태양 광도 단위, L_sun)", min_value=0.0001, max_value=1000000.0, value=1.0)
+    T = st.number_input("온도 (켈빈, K)", min_value=1000.0, max_value=50000.0, value=5800.0)
+
+    # 질량 추정
+    M = estimate_mass(L)
+    st.write(f"추정된 질량: {M:.2f} 태양 질량")
+
+    # 진화 경로 정의
+    path = define_evolution_path(L, T, M)
+
+    # 배경 데이터 생성
+    L_ms, T_ms, L_giants, T_giants, L_wd, T_wd = generate_hr_background()
+
+    # 그래프 생성 및 표시
+    fig = create_plot(L_ms, T_ms, L_giants, T_giants, L_wd, T_wd, path)
+    st.plotly_chart(fig)
+
+    # 설명 추가
+    st.markdown("""
+    ### 설명
+    - **주계열성**: 파란색 점으로 표시.
+    - **거성**: 빨간색 점으로 표시.
+    - **백색왜성**: 초록색 점으로 표시.
+    - 입력한 별은 노란색 점으로 표시되며, 검은 선은 진화 경로를 나타냅니다.
+    - 질량이 8 태양 질량 미만이면 적색거성을 거쳐 백색왜성으로 진화합니다.
+    - 질량이 8 태양 질량 이상이면 초거성을 거쳐 초신성으로 끝납니다.
+    """)
+
+if __name__ == "__main__":
+    main()
